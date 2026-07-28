@@ -10,9 +10,9 @@ def test_accepts_explicit_v2_lifecycle(tmp_path: Path) -> None:
         "class WeatherPlugin(Plugin):\n"
         "    api_version = 2\n"
         "    async def prepare(self):\n"
-        "        self.context.create_task(self.worker())\n"
-        "    def activate(self):\n"
         "        return None\n"
+        "    def activate(self):\n"
+        "        self.context.create_task(self.worker())\n"
         "    async def worker(self):\n"
         "        return None\n",
         encoding="utf-8",
@@ -55,10 +55,15 @@ def test_rejects_prepare_data_dir_and_unscoped_task(tmp_path: Path) -> None:
         "    api_version = 2\n"
         "    async def prepare(self):\n"
         "        self.context.data_dir.mkdir()\n"
+        "        self.context.create_task(self.worker())\n"
         "        asyncio.create_task(self.worker())\n",
         encoding="utf-8",
     )
 
     report = check_plugin(path)
 
-    assert {item.code for item in report.violations} == {"PLG204", "PLG205"}
+    assert {item.code for item in report.violations} == {
+        "PLG204",
+        "PLG205",
+        "PLG206",
+    }

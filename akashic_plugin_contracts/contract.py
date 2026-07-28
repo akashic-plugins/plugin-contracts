@@ -136,16 +136,28 @@ def _require_method_kind(
 def _check_prepare_boundary(
     method: ast.FunctionDef | ast.AsyncFunctionDef,
 ) -> list[ContractViolation]:
+    violations: list[ContractViolation] = []
     for node in ast.walk(method):
         if _attribute_path(node) == ("self", "context", "data_dir"):
-            return [
+            violations.append(
                 ContractViolation(
                     "PLG204",
                     node.lineno,
                     "prepare() 不得取得正式 plugin-data 路径",
                 )
-            ]
-    return []
+            )
+        if (
+            isinstance(node, ast.Call)
+            and _attribute_path(node.func) == ("self", "context", "create_task")
+        ):
+            violations.append(
+                ContractViolation(
+                    "PLG206",
+                    node.lineno,
+                    "prepare() 不得启动后台任务，任务只能在 activate() 中启动",
+                )
+            )
+    return violations
 
 
 def _check_task_ownership(
