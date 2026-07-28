@@ -11,5 +11,8 @@ requires-python = ">=3.11"
 [project.scripts]
 akashic-plugin-contract = "akashic_plugin_contracts.cli:main"
 
+[tool.setuptools]
+packages = ["akashic_plugin_contracts"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
