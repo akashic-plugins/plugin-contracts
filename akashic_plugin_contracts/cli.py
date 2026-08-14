@@ -15,10 +15,16 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     reports = [check_plugin(path) for path in args.paths]
+    versions = {report.api_version for report in reports}
+    contract = (
+        f"akashic-plugin-api-v{next(iter(versions))}"
+        if len(versions) == 1
+        else "akashic-plugin-api"
+    )
     print(
         json.dumps(
             {
-                "contract": "akashic-plugin-api-v2",
+                "contract": contract,
                 "passed": all(report.passed for report in reports),
                 "reports": [report.to_dict() for report in reports],
             },

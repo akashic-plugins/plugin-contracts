@@ -17,6 +17,8 @@ class ContractViolation:
 class ContractReport:
     path: str
     sha256: str
+    api_version: int
+    entrypoint: str
     plugin_classes: tuple[str, ...]
     violations: tuple[ContractViolation, ...]
 
@@ -28,6 +30,8 @@ class ContractReport:
         return {
             "path": self.path,
             "sha256": self.sha256,
+            "api_version": self.api_version,
+            "entrypoint": self.entrypoint,
             "plugin_classes": list(self.plugin_classes),
             "passed": self.passed,
             "violations": [asdict(item) for item in self.violations],
@@ -35,33 +39,121 @@ class ContractReport:
 
 
 def check_plugin(path: Path) -> ContractReport:
-    """Parse one plugin entrypoint and report every API v2 contract violation."""
+    """Parse one plugin entrypoint and report every supported API violation."""
 
     # 1. 固定被验收源码身份
     source = path.read_bytes()
     tree = ast.parse(source, filename=str(path))
 
-    # 2. 逐个检查 Plugin 子类的版本与生命周期
+    # 2. Select the module v3 contract or the legacy class v2 contract.
     classes = [
         node
         for node in tree.body
         if isinstance(node, ast.ClassDef) and _inherits_plugin(node)
     ]
     violations: list[ContractViolation] = []
-    if not classes:
-        violations.append(
-            ContractViolation("PLG200", 1, "plugin.py 缺少 Plugin 子类")
-        )
-    for plugin_class in classes:
-        violations.extend(_check_class(plugin_class))
+    module_api_version = _module_constant(tree, "api_version")
+    if module_api_version == 3:
+        api_version = 3
+        entrypoint = "module"
+        violations.extend(_check_v3_module(tree))
+        for plugin_class in classes:
+            violations.extend(_check_class(plugin_class))
+    else:
+        api_version = 2
+        entrypoint = "class"
+        if module_api_version is not None:
+            violations.append(
+                ContractViolation(
+                    "PLG300",
+                    1,
+                    "模块 api_version 只支持 3；API v2 版本声明属于 Plugin 子类",
+                )
+            )
+        if not classes:
+            violations.append(
+                ContractViolation("PLG200", 1, "plugin.py 缺少 Plugin 子类")
+            )
+        for plugin_class in classes:
+            violations.extend(_check_class(plugin_class))
 
     # 3. 输出可供跨仓库 CI 绑定的稳定报告
     return ContractReport(
         path=str(path.resolve()),
         sha256=hashlib.sha256(source).hexdigest(),
+        api_version=api_version,
+        entrypoint=entrypoint,
         plugin_classes=tuple(item.name for item in classes),
         violations=tuple(violations),
     )
+
+
+def _check_v3_module(tree: ast.Module) -> list[ContractViolation]:
+    """Validate the named exports that Core invokes for API v3."""
+
+    # 1. Identity exports are literal and reviewable without importing plugin code.
+    violations: list[ContractViolation] = []
+    for name in ("name", "version"):
+        value = _module_constant(tree, name)
+        if not isinstance(value, str) or not value or value != value.strip():
+            violations.append(
+                ContractViolation(
+                    "PLG301",
+                    1,
+                    f"API v3 模块必须声明非空字符串 {name}",
+                )
+            )
+
+    # 2. Core calls exactly apply(ctx, config); sync and async bodies are both valid.
+    apply = next(
+        (
+            node
+            for node in tree.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == "apply"
+        ),
+        None,
+    )
+    if apply is None:
+        violations.append(
+            ContractViolation("PLG302", 1, "API v3 模块缺少 apply(ctx, config)")
+        )
+        return violations
+    positional = (*apply.args.posonlyargs, *apply.args.args)
+    if (
+        tuple(arg.arg for arg in positional) != ("ctx", "config")
+        or apply.args.vararg is not None
+        or apply.args.kwarg is not None
+        or apply.args.kwonlyargs
+    ):
+        violations.append(
+            ContractViolation(
+                "PLG303",
+                apply.lineno,
+                "API v3 apply 必须精确声明 apply(ctx, config)",
+            )
+        )
+    violations.extend(_check_v3_task_ownership(apply))
+    return violations
+
+
+def _check_v3_task_ownership(
+    apply: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> list[ContractViolation]:
+    violations: list[ContractViolation] = []
+    for node in ast.walk(apply):
+        if isinstance(node, ast.Call) and _attribute_path(node.func) == (
+            "asyncio",
+            "create_task",
+        ):
+            violations.append(
+                ContractViolation(
+                    "PLG304",
+                    node.lineno,
+                    "API v3 后台任务必须用 ctx.spawn() 绑定 Fiber scope",
+                )
+            )
+    return violations
 
 
 def _check_class(plugin_class: ast.ClassDef) -> list[ContractViolation]:
@@ -89,18 +181,10 @@ def _check_class(plugin_class: ast.ClassDef) -> list[ContractViolation]:
                 "API v2 禁止 initialize()，按副作用归入 prepare() 或 activate()",
             )
         )
-    violations.extend(
-        _require_method_kind(methods, "prepare", asynchronous=True)
-    )
-    violations.extend(
-        _require_method_kind(methods, "activate", asynchronous=False)
-    )
-    violations.extend(
-        _require_method_kind(methods, "retire", asynchronous=False)
-    )
-    violations.extend(
-        _require_method_kind(methods, "terminate", asynchronous=True)
-    )
+    violations.extend(_require_method_kind(methods, "prepare", asynchronous=True))
+    violations.extend(_require_method_kind(methods, "activate", asynchronous=False))
+    violations.extend(_require_method_kind(methods, "retire", asynchronous=False))
+    violations.extend(_require_method_kind(methods, "terminate", asynchronous=True))
     prepare = methods.get("prepare")
     if prepare is not None:
         violations.extend(_check_prepare_boundary(prepare))
@@ -138,7 +222,11 @@ def _check_prepare_boundary(
 ) -> list[ContractViolation]:
     violations: list[ContractViolation] = []
     for node in ast.walk(method):
-        if _attribute_path(node) == ("self", "context", "data_dir"):
+        if isinstance(node, ast.Attribute) and _attribute_path(node) == (
+            "self",
+            "context",
+            "data_dir",
+        ):
             violations.append(
                 ContractViolation(
                     "PLG204",
@@ -146,9 +234,10 @@ def _check_prepare_boundary(
                     "prepare() 不得取得正式 plugin-data 路径",
                 )
             )
-        if (
-            isinstance(node, ast.Call)
-            and _attribute_path(node.func) == ("self", "context", "create_task")
+        if isinstance(node, ast.Call) and _attribute_path(node.func) == (
+            "self",
+            "context",
+            "create_task",
         ):
             violations.append(
                 ContractViolation(
@@ -189,6 +278,19 @@ def _class_constant(node: ast.ClassDef, name: str) -> object:
         target = item.targets[0]
         if isinstance(target, ast.Name) and target.id == name:
             return ast.literal_eval(item.value)
+    return None
+
+
+def _module_constant(node: ast.Module, name: str) -> object:
+    for item in node.body:
+        if not isinstance(item, ast.Assign) or len(item.targets) != 1:
+            continue
+        target = item.targets[0]
+        if isinstance(target, ast.Name) and target.id == name:
+            try:
+                return ast.literal_eval(item.value)
+            except (ValueError, TypeError):
+                return None
     return None
 
 
