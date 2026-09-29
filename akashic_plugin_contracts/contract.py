@@ -104,7 +104,7 @@ def _check_v3_module(tree: ast.Module) -> list[ContractViolation]:
                 )
             )
 
-    # 2. Core calls exactly apply(ctx, config); sync and async bodies are both valid.
+    # 2. Core calls exactly apply(ctx); sync and async bodies are both valid.
     apply = next(
         (
             node
@@ -116,12 +116,12 @@ def _check_v3_module(tree: ast.Module) -> list[ContractViolation]:
     )
     if apply is None:
         violations.append(
-            ContractViolation("PLG302", 1, "API v3 模块缺少 apply(ctx, config)")
+            ContractViolation("PLG302", 1, "API v3 模块缺少 apply(ctx)")
         )
         return violations
     positional = (*apply.args.posonlyargs, *apply.args.args)
     if (
-        tuple(arg.arg for arg in positional) != ("ctx", "config")
+        tuple(arg.arg for arg in positional) != ("ctx",)
         or apply.args.vararg is not None
         or apply.args.kwarg is not None
         or apply.args.kwonlyargs
@@ -130,7 +130,7 @@ def _check_v3_module(tree: ast.Module) -> list[ContractViolation]:
             ContractViolation(
                 "PLG303",
                 apply.lineno,
-                "API v3 apply 必须精确声明 apply(ctx, config)",
+                "API v3 apply 必须精确声明 apply(ctx)",
             )
         )
     violations.extend(_check_v3_task_ownership(apply))

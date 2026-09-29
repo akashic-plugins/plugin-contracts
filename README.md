@@ -9,7 +9,7 @@ python -m akashic_plugin_contracts check /path/to/plugin.py
 
 当前硬规则：
 
-- 模块声明 `api_version = 3` 时，必须提供非空 `name`、`version` 与精确的 `apply(ctx, config)`；
+- 模块声明 `api_version = 3` 时，必须提供非空 `name`、`version` 与精确的 `apply(ctx)`；
 - API v3 不要求继承 `Plugin`，直接后台任务必须用 `ctx.spawn()` 绑定 Fiber scope；
 - `Plugin` 子类必须显式声明 `api_version = 2`；
 - 禁止旧 `initialize()` 生命周期；

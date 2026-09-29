@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "akashic-plugin-contracts"
-version = "3.0.0"
+version = "3.0.1"
 description = "Akashic Plugin API v2 and v3 static contract gate"
 requires-python = ">=3.11"
 

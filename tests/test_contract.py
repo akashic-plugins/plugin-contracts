@@ -79,7 +79,7 @@ def test_accepts_v3_named_exports_without_plugin_class(tmp_path: Path) -> None:
         "name = 'weather'\n"
         "version = '1.0.0'\n"
         "inject = (ServiceKey('clock'),)\n"
-        "async def apply(ctx, config):\n"
+        "async def apply(ctx):\n"
         "    await ctx.spawn(worker(), name='weather')\n",
         encoding="utf-8",
     )
@@ -99,7 +99,7 @@ def test_accepts_v3_with_transition_v2_class(tmp_path: Path) -> None:
         "api_version = 3\n"
         "name = 'weather'\n"
         "version = '1.0.0'\n"
-        "def apply(ctx, config):\n"
+        "def apply(ctx):\n"
         "    return None\n"
         "class WeatherPlugin(Plugin):\n"
         "    api_version = 2\n",
@@ -144,3 +144,16 @@ def test_rejects_v3_without_apply(tmp_path: Path) -> None:
     report = check_plugin(path)
 
     assert {item.code for item in report.violations} == {"PLG302"}
+
+
+def test_rejects_retired_v3_config_argument(tmp_path: Path) -> None:
+    """A second required argument cannot be supplied by the current Core loader."""
+    plugin = tmp_path / "plugin.py"
+    plugin.write_text(
+        'api_version = 3\nname = "example"\nversion = "1.0.0"\n'
+        'async def apply(ctx, config):\n    pass\n',
+        encoding="utf-8",
+    )
+    report = check_plugin(plugin)
+    assert not report.passed
+    assert [item.code for item in report.violations] == ["PLG303"]
